@@ -278,4 +278,35 @@ final class PreviewControllerTests: XCTestCase {
         // In test bundle, version.txt may not exist — should fall back to "dev"
         XCTAssertFalse(version.isEmpty, "Version should never be empty")
     }
+
+    // MARK: - Dynamic Mermaid Loading
+
+    func testDynamicMermaidInsertionTriggersFullReload() throws {
+        let controller = MarkdownWebController()
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let file = tmpDir.appendingPathComponent("doc.md")
+        try "# Initial document without mermaid".write(to: file, atomically: true, encoding: .utf8)
+
+        controller.readFile = { url, completion in
+            completion(try? String(contentsOf: url, encoding: .utf8))
+        }
+
+        try controller.loadMarkdownFile(at: file)
+        XCTAssertFalse(controller.hasLoadedMermaid,
+                       "Initial diagram-free document must not have loaded mermaid")
+
+        // Now simulate user editing the file to add a mermaid fence
+        let mermaidContent = "# Updated\n\n```mermaid\nflowchart LR\n    A --> B\n```"
+        try mermaidContent.write(to: file, atomically: true, encoding: .utf8)
+
+        let exp = expectation(description: "Reload completes")
+        try controller.loadMarkdownFile(at: file)
+        XCTAssertTrue(controller.hasLoadedMermaid,
+                      "Document with mermaid fence must set hasLoadedMermaid to true")
+        exp.fulfill()
+        wait(for: [exp], timeout: 1)
+    }
 }

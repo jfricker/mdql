@@ -45,6 +45,9 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
     /// own, so it stays false there.
     var appChrome: Bool = false
 
+    /// Tracks whether the current document HTML loaded the Mermaid runtime.
+    private(set) var hasLoadedMermaid: Bool = false
+
     override init() {
         let config = WKWebViewConfiguration()
         self.webView = WKWebView(frame: NSRect(origin: .zero, size: MarkdownRenderer.previewSize), configuration: config)
@@ -68,6 +71,7 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         let markdown = try String(contentsOf: url, encoding: .utf8)
         let title = url.deletingPathExtension().lastPathComponent
         let html = MarkdownRenderer.render(markdown: markdown, title: title, interactive: interactive, appChrome: appChrome)
+        hasLoadedMermaid = html.contains("id=\"mdql-mermaid\"")
         fileWatcher?.stop()
         fileURL = url
         fileHistory.removeAll()
@@ -127,6 +131,7 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         fileURL = url
         let title = url.deletingPathExtension().lastPathComponent
         let html = MarkdownRenderer.render(markdown: markdown, title: title, showBackButton: !fileHistory.isEmpty, interactive: interactive, appChrome: appChrome)
+        hasLoadedMermaid = html.contains("id=\"mdql-mermaid\"")
         webView.loadHTMLString(html, baseURL: nil)
         startWatching(url)
     }
@@ -143,6 +148,11 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         readFile(url) { [weak self] markdown in
             guard let self = self, let markdown = markdown else { return }
             let bodyHTML = MarkdownRenderer.renderBody(markdown: markdown, interactive: self.interactive)
+            let needsMermaid = bodyHTML.contains("language-mermaid")
+            if needsMermaid && !self.hasLoadedMermaid {
+                self.showMarkdown(markdown, url: url)
+                return
+            }
             let base64 = Data(bodyHTML.utf8).base64EncodedString()
             self.webView.evaluateJavaScript(
                 "document.querySelector('.markdown-body').innerHTML = new TextDecoder().decode(Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0))); window.__mdqlRenderDiagrams && window.__mdqlRenderDiagrams();"
