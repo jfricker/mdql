@@ -209,6 +209,7 @@ public struct MarkdownRenderer {
     private static func wrapInHTMLDocument(body: String, title: String, showBackButton: Bool = false, interactive: Bool = false, appChrome: Bool = false) -> String {
         let css = loadCSS()
         let version = loadVersion()
+        let mermaidScript = mermaidScriptTag(for: body)
         let escapedTitle = escapeHTML(title)
         let backButtonHTML = showBackButton ? """
         <div id="mdql-back" onclick="window.webkit.messageHandlers.mdql.postMessage({action:'goBack'})"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg></div>
@@ -297,12 +298,52 @@ public struct MarkdownRenderer {
         <article class="markdown-body" style="display:none;">
         \(body)
         </article>
+        \(mermaidScript)
         <script>
         (function() {
             var loader = document.getElementById('mdql-loading');
             var article = document.querySelector('.markdown-body');
             if (loader) loader.remove();
             if (article) article.style.display = '';
+
+            // Mermaid diagrams: the runtime is only embedded when the document
+            // has a ```mermaid fence (see mermaidScriptTag(for:)). The hook is
+            // also re-invoked after live-update innerHTML swaps — rendered
+            // blocks are marked with data-mdql-mermaid, so it is idempotent.
+            window.__mdqlRenderDiagrams = function() {
+                var blocks = document.querySelectorAll('.markdown-body pre code.language-mermaid');
+                if (!blocks.length || typeof mermaid === 'undefined') return;
+                if (!window.__mdqlMermaidReady) {
+                    mermaid.initialize({
+                        startOnLoad: false,
+                        securityLevel: 'strict',
+                        suppressErrorRendering: true,
+                        theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'
+                    });
+                    window.__mdqlMermaidReady = true;
+                }
+                var seq = 0;
+                blocks.forEach(function(code) {
+                    var pre = code.parentElement;
+                    if (pre.getAttribute('data-mdql-mermaid')) return;
+                    pre.setAttribute('data-mdql-mermaid', '1');
+                    // textContent is entity-decoded by the browser, so mermaid
+                    // gets the raw fence source.
+                    mermaid.render('mdql-mermaid-svg-' + (seq++), code.textContent).then(function(svg) {
+                        var div = document.createElement('div');
+                        div.className = 'mdql-mermaid';
+                        div.innerHTML = svg;
+                        pre.replaceWith(div);
+                    }).catch(function(err) {
+                        pre.classList.add('mdql-mermaid-error');
+                        var note = document.createElement('div');
+                        note.className = 'mdql-mermaid-error-msg';
+                        note.textContent = 'Diagram error: ' + (err && err.message || err);
+                        pre.after(note);
+                    });
+                });
+            };
+            window.__mdqlRenderDiagrams();
 
             var toast = document.createElement('div');
             toast.id = 'mdql-toast';
@@ -383,6 +424,27 @@ public struct MarkdownRenderer {
         </body>
         </html>
         """
+    }
+
+    /// mermaid.min.js, loaded once and made safe to embed inside a <script>
+    /// tag: `</script` inside JS string literals would close the tag early,
+    /// and `<\/script` is the identical string value inside those literals.
+    private static let mermaidRuntime: String? = {
+        guard let url = Bundle(for: BundleAnchor.self).url(forResource: "mermaid.min", withExtension: "js"),
+              let js = try? String(contentsOf: url, encoding: .utf8) else {
+            return nil
+        }
+        return js
+            .replacingOccurrences(of: "</script", with: "<\\/script")
+            .replacingOccurrences(of: "<!--", with: "<\\!--")
+    }()
+
+    /// The Mermaid runtime is embedded only when the body has a mermaid fence —
+    /// diagram-free files must render exactly the HTML they always did. The
+    /// in-page `__mdqlRenderDiagrams` hook does the actual rendering.
+    internal static func mermaidScriptTag(for body: String) -> String {
+        guard body.contains("language-mermaid"), let js = mermaidRuntime else { return "" }
+        return "\n<script id=\"mdql-mermaid\">\n\(js)\n</script>\n"
     }
 
     private static func loadCSS() -> String {

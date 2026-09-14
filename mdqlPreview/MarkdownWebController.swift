@@ -145,7 +145,7 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
             let bodyHTML = MarkdownRenderer.renderBody(markdown: markdown, interactive: self.interactive)
             let base64 = Data(bodyHTML.utf8).base64EncodedString()
             self.webView.evaluateJavaScript(
-                "document.querySelector('.markdown-body').innerHTML = new TextDecoder().decode(Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0)))"
+                "document.querySelector('.markdown-body').innerHTML = new TextDecoder().decode(Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0))); window.__mdqlRenderDiagrams && window.__mdqlRenderDiagrams();"
             )
         }
     }
