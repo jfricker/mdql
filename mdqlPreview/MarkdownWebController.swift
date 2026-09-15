@@ -45,7 +45,9 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
     /// own, so it stays false there.
     var appChrome: Bool = false
 
-    /// Tracks whether the current document HTML loaded the Mermaid runtime.
+    /// Whether the current document HTML embedded the Mermaid runtime. The
+    /// runtime is inlined iff the body has a fence, so this mirrors
+    /// `MarkdownRenderer.mermaidScriptTag(for:)`.
     private(set) var hasLoadedMermaid: Bool = false
 
     override init() {
@@ -71,7 +73,7 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         let markdown = try String(contentsOf: url, encoding: .utf8)
         let title = url.deletingPathExtension().lastPathComponent
         let html = MarkdownRenderer.render(markdown: markdown, title: title, interactive: interactive, appChrome: appChrome)
-        hasLoadedMermaid = html.contains("id=\"mdql-mermaid\"")
+        hasLoadedMermaid = MarkdownRenderer.containsMermaidFence(html)
         fileWatcher?.stop()
         fileURL = url
         fileHistory.removeAll()
@@ -131,7 +133,7 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         fileURL = url
         let title = url.deletingPathExtension().lastPathComponent
         let html = MarkdownRenderer.render(markdown: markdown, title: title, showBackButton: !fileHistory.isEmpty, interactive: interactive, appChrome: appChrome)
-        hasLoadedMermaid = html.contains("id=\"mdql-mermaid\"")
+        hasLoadedMermaid = MarkdownRenderer.containsMermaidFence(html)
         webView.loadHTMLString(html, baseURL: nil)
         startWatching(url)
     }
@@ -143,19 +145,25 @@ final class MarkdownWebController: NSObject, WKNavigationDelegate, WKScriptMessa
         fileWatcher?.start()
     }
 
-    private func reloadContent() {
+    /// Re-renders the watched file after a change on disk. Exposed for testing.
+    func reloadContent() {
         guard let url = fileURL else { return }
         readFile(url) { [weak self] markdown in
             guard let self = self, let markdown = markdown else { return }
             let bodyHTML = MarkdownRenderer.renderBody(markdown: markdown, interactive: self.interactive)
-            let needsMermaid = bodyHTML.contains("language-mermaid")
+            let needsMermaid = MarkdownRenderer.containsMermaidFence(bodyHTML)
             if needsMermaid && !self.hasLoadedMermaid {
                 self.showMarkdown(markdown, url: url)
                 return
             }
             let base64 = Data(bodyHTML.utf8).base64EncodedString()
+            // __mdqlSwapBody (see MarkdownRenderer) swaps the body and puts
+            // unchanged diagrams back without re-rendering them. A change can
+            // land after the article is parsed but before the init script
+            // defines the hook (e.g. while mermaid is still parsing); a plain
+            // swap then lets the init script render the new body.
             self.webView.evaluateJavaScript(
-                "document.querySelector('.markdown-body').innerHTML = new TextDecoder().decode(Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0))); window.__mdqlRenderDiagrams && window.__mdqlRenderDiagrams();"
+                "(function(h) { if (window.__mdqlSwapBody) { window.__mdqlSwapBody(h); return; } var a = document.querySelector('.markdown-body'); if (a) a.innerHTML = h; })(new TextDecoder().decode(Uint8Array.from(atob('\(base64)'), c => c.charCodeAt(0))));"
             )
         }
     }
