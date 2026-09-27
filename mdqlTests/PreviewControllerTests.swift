@@ -590,7 +590,6 @@ final class PreviewControllerTests: XCTestCase {
         autoreleasepool {
             let preview = PreviewController()
             _ = preview.view
-            preview.viewDidDisappear()
             weakPreviewController = preview
             weakWebController = preview.controller
             XCTAssertNotNil(weakPreviewController)
@@ -599,6 +598,23 @@ final class PreviewControllerTests: XCTestCase {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         XCTAssertNil(weakPreviewController, "PreviewController should deallocate")
         XCTAssertNil(weakWebController, "MarkdownWebController should deallocate")
+    }
+
+    func testViewDidDisappearDoesNotTearDownController() {
+        let preview = PreviewController()
+        _ = preview.view
+        XCTAssertNotNil(preview.controller.webView.navigationDelegate)
+        preview.viewDidDisappear()
+        XCTAssertNotNil(preview.controller.webView.navigationDelegate,
+                        "viewDidDisappear must not teardown the controller during window transitions")
+    }
+
+    func testPreviewControllerSetsAppearanceFromSystem() {
+        let preview = PreviewController()
+        _ = preview.view
+        let expected = NSApp?.effectiveAppearance ?? NSApplication.shared.effectiveAppearance
+        XCTAssertEqual(preview.view.appearance?.name, expected.name,
+                       "PreviewController view appearance should match system effective appearance")
     }
 
     func testTeardownClearsNavigationDelegateAndAllowsReArm() throws {
